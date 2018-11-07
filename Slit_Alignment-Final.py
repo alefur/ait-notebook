@@ -8,6 +8,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from ginga.util import iqcalc
+from scipy.interpolate import interp1d
+from matplotlib.ticker import NullFormatter
 
 
 # In[2]:
@@ -15,7 +17,7 @@ from ginga.util import iqcalc
 
 # import LAM library for logbook, data analysis...
 from pfs.sacFileHandling import stackedImage, Logbook, constructFilelist, getDateObs
-from pfs.imageAnalysis import fitparabola, getEE
+from pfs.imageAnalysis import fitparabola, getEE, fitgauss1D
 
 
 # In[3]:
@@ -77,7 +79,7 @@ def getFiberPeak(filelist, ind, duplicate, doMeanBck, crit, radius=60, threshold
 def getDescription(experimentId):
     visitStart, visitEnd = Logbook.visitRange(experimentId=experimentId)
     filelist = constructFilelist(visitStart=visitStart, visitEnd=visitEnd)
-    fibername = Logbook.getParameter(experimentId=experimentId, param='fiber')
+    fibername = Logbook.getParameter(experimentId=experimentId, param='fiber', doRaise=False)  
     duplicate = int(Logbook.getParameter(experimentId=experimentId, param='duplicate'))
     dateobs = getDateObs(experimentId=experimentId)
 
@@ -116,7 +118,7 @@ experiments = pd.read_sql_query('select * from Experiment where experimentId>89 
                                 con='sqlite:////data/ait/ait-alignment.db', index_col='experimentId')
 
 experiments['exptime'] = [Logbook.getParameter(experimentId, 'exptime') for experimentId in experiments.index]
-experiments['fiber'] = [Logbook.getParameter(experimentId, 'fiber') for experimentId in experiments.index]
+experiments['fiber'] = [Logbook.getParameter(experimentId, 'fiber', doRaise=False) for experimentId in experiments.index]
 experiments['dateobs'] = [getDateObs(experimentId=experimentId) for experimentId in experiments.index]
 
 experiments
@@ -135,16 +137,17 @@ experiments
 # ## Input Parameters : 
 # The only parameters needed is the experimentIds that match your data acquisition sequence
 
-# In[9]:
+# In[53]:
 
 
 centerOfMass = True
 doMeanBck = True
-experimentIds = [107, 108, 109, 110]  # the first experimentId is 12
+corrector=True
+experimentIds = [126,127]  # the first experimentId is 12
 dfs = []
 
 
-# In[10]:
+# In[54]:
 
 
 crit = 'com_EE' if centerOfMass else 'EE'
@@ -155,7 +158,7 @@ for experimentId in experimentIds:
 cube = pd.concat(dfs)
 
 
-# In[14]:
+# In[55]:
 
 
 descriptions = pd.concat([getDescription(experimentId) for experimentId, df in cube.groupby('experimentId')])
@@ -163,7 +166,7 @@ descriptions = descriptions.set_index('experimentId')
 descriptions
 
 
-# In[15]:
+# In[56]:
 
 
 lneg = 0
@@ -171,7 +174,7 @@ lpos = -1
 vline = False
 
 
-# In[22]:
+# In[58]:
 
 
 fig = plt.figure(figsize=(12, 8))
@@ -189,9 +192,10 @@ if vline:
 
 for experimentId, raw_df in cube.groupby('experimentId'):
     df = raw_df[lneg:lpos]
-    fit_EE = fitparabola(x=df['fca_x'], y=df[crit], deg=15, focus='max')
-
-    ax1.plot(df['fca_x'], df[crit], 'o', label='%i:%s = %.3f' % (experimentId, descriptions.fiber[experimentId], fit_EE.focus))
+    poly_EE = fitparabola(x=df['fca_x'], y=df[crit], deg=15, focus='max')
+    gauss_EE, __ = fitgauss1D(df['fca_x'], df[crit], sig0=1)
+    fit_EE = gauss_EE if corrector else poly_EE
+    ax1.plot(df['fca_x'], df[crit], 'o', label='expId%d:%s = %.3f' % (experimentId, descriptions.fiber[experimentId], fit_EE.focus))
     ax1.plot(fit_EE.x, fit_EE.y, '--', color=ax1.get_lines()[-1].get_color())
     if vline:
         ax1.vlines(color=ax1.get_lines()[-1].get_color(), **fit_EE.vline)
@@ -205,4 +209,50 @@ ax1.set_ylabel('Ensquared Energy')
 
 plt.title('Slit Through focus : Zemax vs Engineering_Fibers \n Criteria : %s' %crit)
 plt.grid()
+
+
+# In[85]:
+
+
+cols = ['com_EE', 'brightness', 'fwhm', 'objx', 'objy']
+fig = plt.figure(figsize=(12, 15))
+
+ax = [fig.add_subplot(int('%d11'%len(cols)))]
+
+for i in range(1, len(cols)):
+    ax.append(fig.add_subplot(int('%d1%d'%(len(cols), i+1)), sharex=ax[0]))
+
+for experimentId, raw_df in cube.groupby('experimentId'):
+    df = raw_df[lneg:lpos]
+    for i, col in enumerate(cols):
+        ax[i].plot(df.fca_x, df[col], label='expId:%d'%experimentId)
+        ax[i].set_ylabel(col)
+                 
+for i, axi in enumerate(ax):
+    axi.legend()
+    axi.grid()
+
+
+# In[86]:
+
+
+kwargs = dict(subplots= True,
+              sharex= True,
+              grid= True,
+              figsize= (12, 8),
+              marker='o')
+
+
+# In[87]:
+
+
+select = cube.loc[cube['experimentId'] == 126]
+
+
+# In[88]:
+
+
+ax = select.plot(x='fca_x', y=[crit, 'brightness', 'fwhm'], **kwargs)
+ax1 = ax[0]
+ax1.vlines(color=ax1.get_lines()[-1].get_color(), **fit_EE.vline)
 
