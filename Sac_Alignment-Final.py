@@ -55,6 +55,18 @@ def sacShift(filelist, duplicate):
     return pd.DataFrame(data=res, columns=['ccdPosition', 'pentaPosition', 'shift_x', 'shift_y'])
 
 
+def getDescription(experimentId):
+    visitStart, visitEnd = Logbook.visitRange(experimentId=experimentId)
+    filelist = constructFilelist(visitStart=visitStart, visitEnd=visitEnd)
+    duplicate = int(Logbook.getParameter(experimentId=experimentId, param='duplicate'))
+    dateobs = getDateObs(experimentId=experimentId)
+
+    description = pd.DataFrame([(experimentId, dateobs, len(filelist), visitStart, visitEnd, duplicate)],
+                               columns=['experimentId', 'dateobs', 'nbImages', 'visitStart', 'visitEnd', 'duplicate'])
+
+    return description
+
+
 # ## Data required : 
 # To be able to find the right focus, some data acquisition is required.
 # 
@@ -75,8 +87,9 @@ def sacShift(filelist, duplicate):
 # In[6]:
 
 
-experimentStart = 27 #the first experimentId is 12
-experimentEnd = 35    #the last experimentId is 16
+experimentStart = 154 #the first experimentId is 12
+experimentEnd = 165    #the last experimentId is 16
+ignore = [156,157,158]
 
 
 # In[7]:
@@ -85,11 +98,15 @@ experimentEnd = 35    #the last experimentId is 16
 dfs = []
 
 for experimentId in range(experimentStart, experimentEnd+1):
+    if experimentId in ignore:
+        continue
     visitStart, visitEnd = Logbook.visitRange(experimentId=experimentId)
     duplicate = int(Logbook.getParameter(experimentId=experimentId, param='duplicate'))
     
     filelist = constructFilelist(visitStart=visitStart, visitEnd=visitEnd)
-    dfs.append(sacShift(filelist=filelist, duplicate=duplicate))
+    df = sacShift(filelist=filelist, duplicate=duplicate)
+    df['experimentId'] = experimentId
+    dfs.append(df)
 
 cube = pd.concat(dfs)
 
@@ -97,10 +114,17 @@ cube = pd.concat(dfs)
 # In[8]:
 
 
+descriptions = pd.concat([getDescription(experimentId) for experimentId in range(experimentStart, experimentEnd+1)])
+descriptions = descriptions.set_index('experimentId')
+descriptions
+
+
+# In[9]:
+
+
 plt.figure(figsize=(12,8))
 plt.xlabel('Pentaprism Position (mm)')
 plt.ylabel('offset (pixels)')
-
 
 for ccdPosition, df in cube.groupby('ccdPosition'):
     plt.plot(df['pentaPosition'], df['shift_x'], 'o-', label='ccdPosition : %.2f'%ccdPosition)
@@ -113,7 +137,7 @@ if False:
     plt.savefig(os.path.join(imgPath, 'SM1_SACALIGN_EXP%i-%i_SPOT_DISPLACEMENT.png'%(experimentStart, experimentEnd)))
 
 
-# In[9]:
+# In[10]:
 
 
 plt.figure(figsize=(12,8))
@@ -127,12 +151,14 @@ for pentaPosition, df in cube.groupby('pentaPosition'):
 plt.title('Spot displacement vs ccdPosition')
 plt.grid()
 plt.legend()
+plt.xlim(3.6,4.8)
+plt.ylim(-3, 3)
 
 if False:
     plt.savefig(os.path.join(imgPath, 'SM1_SACALIGN_EXP%i-%i_SPOT_DISPLACEMENT.png'%(experimentStart, experimentEnd)))
 
 
-# In[10]:
+# In[11]:
 
 
 data = []
@@ -143,7 +169,7 @@ for ccdPosition, df in cube.groupby('ccdPosition'):
 df = pd.DataFrame(data=data, columns=['ccdPosition', 'slope'])
 
 
-# In[11]:
+# In[12]:
 
 
 x = np.arange(np.min(df['ccdPosition']), np.max(df['ccdPosition'])+0.01, 0.01)
@@ -156,7 +182,7 @@ plt.ylabel('Slope')
 plt.plot(df['ccdPosition'], df['slope'], 'o')
 plt.plot(x, np.polyval(popt, x), '-')
 
-calc_focus = -popt[1]/popt[0]
+[calc_focus] = np.roots(popt)
 plt.vlines(x=calc_focus, ymin=np.min(df['slope']), ymax=np.max(df['slope']))
 plt.title('Calculated Focus = %.3f mm'%calc_focus)
 plt.grid()
@@ -165,18 +191,50 @@ if False:
     plt.savefig(os.path.join(imgPath, 'SM1_SACALIGN_EXP%i-%i_CALC_FOCUS.png'%(experimentStart, experimentEnd)))
 
 
-# In[12]:
+# In[30]:
 
 
 f = 1497.
 pix_size = 4.539e-3
+defoc = []
+
+for ccdPosition, df in cube.groupby('ccdPosition'):
+    defoc.append((ccdPosition, df.shift_x.iloc[-1] * pix_size * f / 90.))
+
+defoc = pd.DataFrame(defoc, columns=['x', 'y'])
+p = np.polyfit(defoc.x, defoc.y, deg=1)
+
+
+# In[37]:
+
+
+defoc.x.iloc[-1]
+
+
+# In[39]:
+
+
+vect = np.arange(defoc.x.iloc[0], defoc.x.iloc[-1], 0.01)
+plt.figure(figsize=(12,8))
+plt.xlabel('Ccd Position (?)')
+plt.ylabel('Calculated deFocus(mm)')
+plt.title('Defocus')
+
+plt.plot(defoc.x, defoc.y, 'bo')
+plt.plot(vect, np.polyval(p, vect), 'b-')
+plt.grid()
+
+
+# In[40]:
+
+
 foc = []
 
 for ccdPosition, df in cube.groupby('ccdPosition'):
-    foc.append(ccdPosition+df.shift_x.iloc[-1] * pix_size * f / 90.)
+    foc.append(ccdPosition + (-1/p[0]) * df.shift_x.iloc[-1] * pix_size * f / 90.)
 
 
-# In[13]:
+# In[41]:
 
 
 plt.figure(figsize=(12,8))
@@ -186,4 +244,10 @@ plt.title('Focus other method')
 
 plt.plot(foc, 'o-')
 plt.grid()
+
+
+# In[20]:
+
+
+print(np.median(foc), np.std(foc))
 
