@@ -9,7 +9,6 @@ import numpy as np
 import pandas as pd
 from ginga.util import iqcalc
 from scipy.interpolate import interp1d
-from matplotlib.ticker import NullFormatter
 
 
 # In[2]:
@@ -111,16 +110,30 @@ def getFiberTF(experimentId, doMeanBck, centerOfMass):
     return pd.DataFrame(res, columns=['experimentId'] + list(fiberPeak.keys()))
 
 
-# In[8]:
+# In[24]:
 
 
-experiments = pd.read_sql_query('select * from Experiment where experimentId>89 order by experimentId desc',
-                                con='sqlite:////data/ait/ait-alignment.db', index_col='experimentId')
+fiberId = {126:'engtopmid',127:'engbotmid',128:'engtopmid',129:'engtopmid', 130:'engtopmid', 131:'engbotmid', 132:'engbotmid', 133:'engbotmid', 135:'engtopmid'}
+
+
+# In[26]:
+
+
+fibers = []
+experiments = pd.read_sql_query('select * from Experiment where type="slitAlignment" order by experimentId desc',
+                                con='sqlite:////data/ait/experimentLog-sac.db', index_col='experimentId')
 
 experiments['exptime'] = [Logbook.getParameter(experimentId, 'exptime') for experimentId in experiments.index]
-experiments['fiber'] = [Logbook.getParameter(experimentId, 'fiber', doRaise=False) for experimentId in experiments.index]
-experiments['dateobs'] = [getDateObs(experimentId=experimentId) for experimentId in experiments.index]
+for experimentId in experiments.index:
+    fiber = Logbook.getParameter(experimentId, 'fiber', doRaise=False)
+    if not fiber:
+        try:
+            fiber = fiberId[experimentId]
+        except KeyError:
+            fiber = ''
+    fibers.append(fiber)
 
+experiments['fiber'] = fibers    
 experiments
 
 
@@ -137,17 +150,17 @@ experiments
 # ## Input Parameters : 
 # The only parameters needed is the experimentIds that match your data acquisition sequence
 
-# In[53]:
+# In[27]:
 
 
 centerOfMass = True
 doMeanBck = True
-corrector=True
-experimentIds = [126,127]  # the first experimentId is 12
+corrector = True
+experimentIds = [126,127,128]  # the first experimentId is 12
 dfs = []
 
 
-# In[54]:
+# In[28]:
 
 
 crit = 'com_EE' if centerOfMass else 'EE'
@@ -158,7 +171,7 @@ for experimentId in experimentIds:
 cube = pd.concat(dfs)
 
 
-# In[55]:
+# In[29]:
 
 
 descriptions = pd.concat([getDescription(experimentId) for experimentId, df in cube.groupby('experimentId')])
@@ -166,31 +179,34 @@ descriptions = descriptions.set_index('experimentId')
 descriptions
 
 
-# In[56]:
+# In[30]:
 
 
 lneg = 0
 lpos = -1
-vline = False
+vline = True
+plotModel = False
 
 
-# In[58]:
+# In[31]:
 
 
 fig = plt.figure(figsize=(12, 8))
 ax1 = fig.add_subplot(111)
 
-ax1.plot(zemaxData.Slitdefocus, zemaxData.MidFiber, 'o', label='Zemax_MidFiber = %.3f' % zemaxMidFit.focus)
-ax1.plot(zemaxMidFit.x, zemaxMidFit.y, '--', color=ax1.get_lines()[-1].get_color())
-if vline:
-    ax1.vlines(color=ax1.get_lines()[-1].get_color(), **zemaxMidFit.vline)
+if plotModel:
+    ax1.plot(zemaxData.Slitdefocus, zemaxData.MidFiber, 'o', label='Zemax_MidFiber = %.3f' % zemaxMidFit.focus)
+    ax1.plot(zemaxMidFit.x, zemaxMidFit.y, '--', color=ax1.get_lines()[-1].get_color())
+    if vline:
+        ax1.vlines(color=ax1.get_lines()[-1].get_color(), **zemaxMidFit.vline)
 
-ax1.plot(zemaxData.Slitdefocus, zemaxData.ExtremeFiber, 'o', label='Zemax_EndFiber = %.3f' % zemaxEndFit.focus)
-ax1.plot(zemaxEndFit.x, zemaxEndFit.y, '--', color=ax1.get_lines()[-1].get_color())
-if vline:
-    ax1.vlines(color=ax1.get_lines()[-1].get_color(), **zemaxEndFit.vline)
+    ax1.plot(zemaxData.Slitdefocus, zemaxData.ExtremeFiber, 'o', label='Zemax_EndFiber = %.3f' % zemaxEndFit.focus)
+    ax1.plot(zemaxEndFit.x, zemaxEndFit.y, '--', color=ax1.get_lines()[-1].get_color())
+    if vline:
+        ax1.vlines(color=ax1.get_lines()[-1].get_color(), **zemaxEndFit.vline)
 
 for experimentId, raw_df in cube.groupby('experimentId'):
+    
     df = raw_df[lneg:lpos]
     poly_EE = fitparabola(x=df['fca_x'], y=df[crit], deg=15, focus='max')
     gauss_EE, __ = fitgauss1D(df['fca_x'], df[crit], sig0=1)
@@ -211,10 +227,10 @@ plt.title('Slit Through focus : Zemax vs Engineering_Fibers \n Criteria : %s' %c
 plt.grid()
 
 
-# In[85]:
+# In[32]:
 
 
-cols = ['com_EE', 'brightness', 'fwhm', 'objx', 'objy']
+cols = ['com_EE', 'brightness', 'fwhm', 'objx', 'objy', 'oid_x', 'oid_y']
 fig = plt.figure(figsize=(12, 15))
 
 ax = [fig.add_subplot(int('%d11'%len(cols)))]
@@ -233,7 +249,7 @@ for i, axi in enumerate(ax):
     axi.grid()
 
 
-# In[86]:
+# In[33]:
 
 
 kwargs = dict(subplots= True,
@@ -243,16 +259,40 @@ kwargs = dict(subplots= True,
               marker='o')
 
 
-# In[87]:
+# In[34]:
 
 
 select = cube.loc[cube['experimentId'] == 126]
 
 
-# In[88]:
+# In[35]:
 
 
 ax = select.plot(x='fca_x', y=[crit, 'brightness', 'fwhm'], **kwargs)
 ax1 = ax[0]
 ax1.vlines(color=ax1.get_lines()[-1].get_color(), **fit_EE.vline)
+
+
+# In[ ]:
+
+
+foc = []
+for experimentId, raw_df in cube.groupby('experimentId'):
+    df = raw_df[lneg:lpos]
+    poly_EE = fitparabola(x=df['fca_x'], y=df[crit], deg=15, focus='max')
+    gauss_EE, __ = fitgauss1D(df['fca_x'], df[crit], sig0=1)
+    fit_EE = gauss_EE if corrector else poly_EE
+    foc.append(fit_EE.focus)
+
+
+# In[ ]:
+
+
+print('focus=%.5f +- %.5f'%(np.mean(foc), np.std(foc)))
+
+
+# In[ ]:
+
+
+0.1 * (0.03-0.288)/(4.348-6.3501)
 
